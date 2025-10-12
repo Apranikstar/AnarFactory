@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "picklebdt"
+version = "0.1.0"
+description = "A ROOT → Pickle → BDT pipeline for high-energy physics data."
+readme = "README.md"
+authors = [{ name="Apranik Fatehi", email="apranik.fatehi@cern.ch" }]
+license = { text = "GNU GPL v3" }
+requires-python = ">=3.8"
+dependencies = [
+    "uproot>=5.0",
+    "awkward>=2.0",
+    "pandas>=2.0",
+    "numpy>=1.22",
+    "xgboost>=2.0",
+    "scikit-learn>=1.2",
+    "tqdm>=4.65"
+]
+
+[project.urls]
+Homepage = "https://github.com/apranikstar/picklebdt"
+Issues = "https://github.com/apranikstar/picklebdt/issues"
