@@ -1,2 +1,10 @@
-# PickleFactory
-A pipeline to train BDT models. 
+# 🥒 PickleFactory
+
+A simple, fun ROOT → Pickle → BDT pipeline for HEP analysis!
+
+## Install
+
+```bash
+pip install picklefactory
+
+
