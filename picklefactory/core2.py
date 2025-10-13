@@ -15,7 +15,8 @@ from tqdm import tqdm
 class RootToPickleConverter:
     """
     Converts ROOT files into pickled pandas DataFrames,
-    trains XGBoost classifiers, performs inference, and links datasets to FCC cross sections.
+    trains XGBoost classifiers, performs inference, annotates with cross sections,
+    and calculates expected significance.
     """
 
     # -------------------------------------------------------------------------
@@ -29,6 +30,7 @@ class RootToPickleConverter:
         sample_fraction=0.1,
         random_seed=42,
         fcc_type=None,  # "FCCee" or "FCChh"
+        lumi_pb=1e3,    # Integrated luminosity in pb^-1
     ):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
@@ -37,10 +39,9 @@ class RootToPickleConverter:
         self.random_seed = random_seed
         self.fcc_type = fcc_type
         self.xsec_map = {}
+        self.lumi_pb = lumi_pb
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Load FCC dataset parameters (cross sections)
         self._load_fcc_parameters()
 
     # -------------------------------------------------------------------------
@@ -139,3 +140,240 @@ class RootToPickleConverter:
 
         for root_file in root_files:
             self._process_file(root_file)
+
+    # -------------------------------------------------------------------------
+    # Training
+    # -------------------------------------------------------------------------
+    def train(
+    self,
+    data_dir,
+    signal_name,
+    background_name,
+    feature_list,
+    model_output="bdt_model.json",
+    params=None,
+):
+    """
+    Train an XGBoost binary classifier.
+    
+    Parameters:
+        data_dir (str): Directory containing pickled DataFrames.
+        signal_name (str): Filename or pattern for signal files.
+        background_name (str): Filename or pattern for background files.
+        feature_list (list): List of features to use for training.
+        model_output (str): Path to save trained model.
+        params (dict): Optional XGBoost parameters.
+    """
+    data_dir = Path(data_dir)
+    all_files = list(data_dir.glob("*.pkl"))
+
+    signal_files = [f for f in all_files if signal_name in f.name]
+    background_files = [f for f in all_files if background_name in f.name]
+
+    if not signal_files:
+        raise RuntimeError(f"No signal files found matching '{signal_name}'")
+    if not background_files:
+        raise RuntimeError(f"No background files found matching '{background_name}'")
+
+    def load_pickle_to_df(file_list, label):
+        dfs = []
+        for fn in file_list:
+            df = pd.read_pickle(fn)
+            df["label"] = label
+            dfs.append(df)
+        return pd.concat(dfs, ignore_index=True)
+
+    df_signal = load_pickle_to_df(signal_files, 1)
+    df_background = load_pickle_to_df(background_files, 0)
+    df_all = pd.concat([df_signal, df_background], ignore_index=True)
+
+    # Ensure numeric columns
+    for c in df_all.columns:
+        if not pd.api.types.is_numeric_dtype(df_all[c]):
+            df_all[c] = pd.to_numeric(
+                df_all[c].apply(lambda x: np.mean(x) if isinstance(x, (list, tuple, np.ndarray)) else x),
+                errors="coerce"
+            ).fillna(0)
+
+    X = df_all[feature_list]
+    y = df_all["label"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dtest = xgb.DMatrix(X_test, label=y_test)
+
+    if params is None:
+        params = {
+            "objective": "binary:logistic",
+            "max_depth": 6,
+            "eta": 0.01,
+            "eval_metric": "auc",
+            "tree_method": "hist",
+            "nthread": 64,
+        }
+
+    bst = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=20000,
+        evals=[(dtrain, "train"), (dtest, "test")],
+        early_stopping_rounds=100,
+        verbose_eval=50
+    )
+
+    bst.save_model(model_output)
+    print(f"\n✅ Training complete! Model saved as {model_output}")
+
+    # -------------------------------------------------------------------------
+    # Inference + Event-level BDT Results
+    # -------------------------------------------------------------------------
+    def inference(
+        self,
+        signal_files,
+        background_files,
+        feature_list,
+        model_path,
+        tree_name="events",
+        cut_value=0.5,
+        chunk_size=100_000,
+        output_dir=".",
+        save_predictions=True,
+        output_prefix="bdt_results"
+    ):
+        """Run inference on ROOT files, save BDT outputs, return dicts of results."""
+
+        def load_root_in_chunks(file_list, step=100_000):
+            for arrays in uproot.iterate(
+                [f"{fn}:{tree_name}" for fn in file_list],
+                feature_list,
+                step_size=step,
+                library="ak",
+            ):
+                yield ak.to_dataframe(arrays)
+
+        def apply_model_and_count(file_path, model, features, cut, step=100_000):
+            total, passed = 0, 0
+            all_preds = []
+            all_dfs = []
+
+            for df in tqdm(load_root_in_chunks([file_path], step=step),
+                           desc=f"Processing {os.path.basename(file_path)}"):
+                if df.empty:
+                    continue
+                dmat = xgb.DMatrix(df[features])
+                preds = model.predict(dmat)
+                df["bdt_score"] = preds
+                df["bdt_pass"] = preds > cut
+
+                total += len(preds)
+                passed += (preds > cut).sum()
+                all_preds.append(preds)
+                all_dfs.append(df)
+
+            xsec = self.get_cross_section(Path(file_path).stem)
+
+            if total == 0:
+                frac = 0.0
+                df_all = pd.DataFrame()
+            else:
+                frac = passed / total
+                df_all = pd.concat(all_dfs, ignore_index=True)
+                df_all["cross_section_pb"] = xsec
+
+            return total, passed, frac, np.concatenate(all_preds), df_all, xsec
+
+        print(f"\n=== Loading model from {model_path} ===")
+        bst = xgb.Booster()
+        bst.load_model(model_path)
+        print("✅ Model loaded successfully")
+
+        results_summary = []
+
+        # Signal
+        print("\n=== Signal Samples ===")
+        sig_results = {}
+        for sig_file in signal_files:
+            sig_total, sig_pass, sig_frac, preds, df_sig, xsec = apply_model_and_count(
+                sig_file, bst, feature_list, cut_value, chunk_size
+            )
+            sig_results[os.path.basename(sig_file)] = (sig_total, sig_pass, sig_frac, preds, df_sig)
+            print(f"{os.path.basename(sig_file)}: {sig_pass}/{sig_total} pass ({sig_frac*100:.2f}%), σ={xsec} pb")
+
+            results_summary.append({
+                "type": "signal",
+                "file": os.path.basename(sig_file),
+                "total": sig_total,
+                "passed": sig_pass,
+                "efficiency": sig_frac,
+                "cross_section_pb": xsec,
+            })
+
+        # Background
+        print("\n=== Background Samples ===")
+        bg_results = {}
+        for bg_file in background_files:
+            bg_total, bg_pass, bg_frac, preds, df_bg, xsec = apply_model_and_count(
+                bg_file, bst, feature_list, cut_value, chunk_size
+            )
+            bg_results[os.path.basename(bg_file)] = (bg_total, bg_pass, bg_frac, preds, df_bg)
+            print(f"{os.path.basename(bg_file)}: {bg_pass}/{bg_total} pass ({bg_frac*100:.2f}%), σ={xsec} pb")
+
+            results_summary.append({
+                "type": "background",
+                "file": os.path.basename(bg_file),
+                "total": bg_total,
+                "passed": bg_pass,
+                "efficiency": bg_frac,
+                "cross_section_pb": xsec,
+            })
+
+        # Save results
+        if save_predictions:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            df_all = pd.concat(
+                [v[4].assign(sample_type="signal") for v in sig_results.values()] +
+                [v[4].assign(sample_type="background") for v in bg_results.values()],
+                ignore_index=True
+            )
+            df_summary = pd.DataFrame(results_summary)
+
+            df_all.to_pickle(output_dir / f"{output_prefix}_events.pkl")
+            df_summary.to_pickle(output_dir / f"{output_prefix}_summary.pkl")
+
+            print(f"\n✅ Saved event-level predictions to {output_dir / f'{output_prefix}_events.pkl'}")
+            print(f"✅ Saved summary results to {output_dir / f'{output_prefix}_summary.pkl'}")
+
+        print("\n✅ Inference complete.")
+        return sig_results, bg_results
+
+    # -------------------------------------------------------------------------
+    # Calculate Significance
+    # -------------------------------------------------------------------------
+    def calculate_significance(self, sig_results, bg_results):
+        """
+        Calculate expected significance S/sqrt(S+B) 
+        using cross sections, integrated luminosity, and BDT efficiencies.
+        """
+        N_signal = 0.0
+        for fn, (total, passed, eff, preds, df) in sig_results.items():
+            xsec = df["cross_section_pb"].iloc[0] if not df.empty else 0.0
+            N_signal += xsec * self.lumi_pb * eff
+
+        N_background = 0.0
+        for fn, (total, passed, eff, preds, df) in bg_results.items():
+            xsec = df["cross_section_pb"].iloc[0] if not df.empty else 0.0
+            N_background += xsec * self.lumi_pb * eff
+
+        significance = 0.0 if N_signal + N_background == 0 else N_signal / np.sqrt(N_signal + N_background)
+
+        print(f"\n📊 Expected significance:")
+        print(f"  Signal: {N_signal:.2f} events")
+        print(f"  Background: {N_background:.2f} events")
+        print(f"  S/sqrt(S+B) = {significance:.3f}")
+
+        return significance
