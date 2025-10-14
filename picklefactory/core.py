@@ -13,7 +13,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 
-class RootToPickleConverter:
+class PickleFactory:
     """
     Converts ROOT files into pickled pandas DataFrames,
     trains XGBoost classifiers, performs inference, annotates with cross sections,
