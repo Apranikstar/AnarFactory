@@ -20,7 +20,7 @@ signal_file = Path(input_dir) / "wzp6_ee_Henueqq_ecm125.root"
 features = list(uproot.open(signal_file)["events"].keys())
 
 # Remove jagged/non-numeric features that XGBoost cannot handle
-bad_features = ["Jet_nconst0", "Jet_nconst1"]  # Add more if needed
+#bad_features = ["Jet_nconst0", "Jet_nconst1"]  # Add more if needed
 features = [f for f in features if f not in bad_features]
 
 print(f"Using {len(features)} features for training")
