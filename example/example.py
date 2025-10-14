@@ -29,7 +29,7 @@ print(f"Dropped features: {set(bad_features) - set(features)}")
 # -----------------------------
 # Initialize converter
 # -----------------------------
-converter = RootToPickleConverter(
+converter = PickleFactory(
     input_dir=input_dir,
     output_dir=output_dir,
     tree_name="events",
@@ -65,7 +65,7 @@ sig_results, bg_results = converter.inference(
     feature_list=features,
     model_path=str(model_output),
     tree_name="events",
-    cut_value=0.988888888,
+    cut_value=0.5,
     chunk_size=100_000,
     output_dir=output_dir,
     save_predictions=True,
