@@ -226,6 +226,25 @@ class RootToPickleConverter:
 
     bst.save_model(model_output)
     print(f"\n✅ Training complete! Model saved as {model_output}")
+    # -------------------------------------------------------------------------
+    # Feature Importance (Variable Ranking)
+    # -------------------------------------------------------------------------
+    importance = bst.get_score(importance_type='gain')
+
+    # Convert to sorted DataFrame
+    df_importance = (
+    pd.DataFrame(list(importance.items()), columns=['feature', 'importance'])
+    .sort_values('importance', ascending=False)
+    .reset_index(drop=True)
+    )
+
+    print("\n📈 Variable ranking (by gain):")
+    print(df_importance)
+
+    # Optionally save to CSV or plot
+    df_importance.to_csv(self.output_dir / "feature_importance.csv", index=False)
+    print(f"✅ Saved variable ranking to {self.output_dir / 'feature_importance.csv'}")
+
 
     # -------------------------------------------------------------------------
     # Inference + Event-level BDT Results
