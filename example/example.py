@@ -1,4 +1,4 @@
-from PickleFactory import PickleFactory
+from ../picklefactory/core import PickleFactory
 import uproot
 from pathlib import Path
 
