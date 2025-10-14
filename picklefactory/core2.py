@@ -12,6 +12,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+
 class RootToPickleConverter:
     """
     Converts ROOT files into pickled pandas DataFrames,
@@ -30,7 +31,7 @@ class RootToPickleConverter:
         sample_fraction=0.1,
         random_seed=42,
         fcc_type=None,  # "FCCee" or "FCChh"
-        lumi_pb=1e3,    # Integrated luminosity in pb^-1
+        lumi_pb=1e7,    # Integrated luminosity in pb^-1
     ):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
@@ -145,117 +146,108 @@ class RootToPickleConverter:
     # Training
     # -------------------------------------------------------------------------
     def train(
-    self,
-    data_dir,
-    signal_name,
-    background_name,
-    feature_list,
-    model_output="bdt_model.json",
-    params=None,
-):
-    """
-    Train an XGBoost binary classifier.
-    
-    Parameters:
-        data_dir (str): Directory containing pickled DataFrames.
-        signal_name (str): Filename or pattern for signal files.
-        background_name (str): Filename or pattern for background files.
-        feature_list (list): List of features to use for training.
-        model_output (str): Path to save trained model.
-        params (dict): Optional XGBoost parameters.
-    """
-    data_dir = Path(data_dir)
-    all_files = list(data_dir.glob("*.pkl"))
+        self,
+        data_dir,
+        signal_name,
+        background_name,
+        feature_list,
+        model_output="bdt_model.json",
+        params=None,
+    ):
+        """
+        Train an XGBoost binary classifier.
+        """
+        data_dir = Path(data_dir)
+        all_files = list(data_dir.glob("*.pkl"))
 
-    signal_files = [f for f in all_files if signal_name in f.name]
-    background_files = [f for f in all_files if background_name in f.name]
+        signal_files = [f for f in all_files if signal_name in f.name]
+        background_files = [f for f in all_files if background_name in f.name]
 
-    if not signal_files:
-        raise RuntimeError(f"No signal files found matching '{signal_name}'")
-    if not background_files:
-        raise RuntimeError(f"No background files found matching '{background_name}'")
+        if not signal_files:
+            raise RuntimeError(f"No signal files found matching '{signal_name}'")
+        if not background_files:
+            raise RuntimeError(f"No background files found matching '{background_name}'")
 
-    def load_pickle_to_df(file_list, label):
-        dfs = []
-        for fn in file_list:
-            df = pd.read_pickle(fn)
-            df["label"] = label
-            dfs.append(df)
-        return pd.concat(dfs, ignore_index=True)
+        def load_pickle_to_df(file_list, label):
+            dfs = []
+            for fn in file_list:
+                df = pd.read_pickle(fn)
+                df["label"] = label
+                dfs.append(df)
+            return pd.concat(dfs, ignore_index=True)
 
-    df_signal = load_pickle_to_df(signal_files, 1)
-    df_background = load_pickle_to_df(background_files, 0)
-    df_all = pd.concat([df_signal, df_background], ignore_index=True)
+        df_signal = load_pickle_to_df(signal_files, 1)
+        df_background = load_pickle_to_df(background_files, 0)
+        df_all = pd.concat([df_signal, df_background], ignore_index=True)
 
-    # Ensure numeric columns
-    for c in df_all.columns:
-        if not pd.api.types.is_numeric_dtype(df_all[c]):
-            df_all[c] = pd.to_numeric(
-                df_all[c].apply(lambda x: np.mean(x) if isinstance(x, (list, tuple, np.ndarray)) else x),
-                errors="coerce"
-            ).fillna(0)
+        # Ensure numeric columns
+        for c in df_all.columns:
+            if not pd.api.types.is_numeric_dtype(df_all[c]):
+                df_all[c] = pd.to_numeric(
+                    df_all[c].apply(lambda x: np.mean(x) if isinstance(x, (list, tuple, np.ndarray)) else x),
+                    errors="coerce"
+                ).fillna(0)
 
-    X = df_all[feature_list]
-    y = df_all["label"]
+        X = df_all[feature_list]
+        y = df_all["label"]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
 
-    dtrain = xgb.DMatrix(X_train, label=y_train)
-    dtest = xgb.DMatrix(X_test, label=y_test)
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        dtest = xgb.DMatrix(X_test, label=y_test)
 
-    if params is None:
-        params = {
-            "objective": "binary:logistic",
-            "max_depth": 6,
-            "eta": 0.01,
-            "eval_metric": "auc",
-            "tree_method": "hist",
-            "nthread": 64,
-        }
+        if params is None:
+            params = {
+                "objective": "binary:logistic",
+                "max_depth": 6,
+                "eta": 0.01,
+                "eval_metric": "auc",
+                "tree_method": "hist",
+                "nthread": 64,
+            }
 
-    bst = xgb.train(
-        params,
-        dtrain,
-        num_boost_round=20000,
-        evals=[(dtrain, "train"), (dtest, "test")],
-        early_stopping_rounds=100,
-        verbose_eval=50
-    )
+        bst = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=20000,
+            evals=[(dtrain, "train"), (dtest, "test")],
+            early_stopping_rounds=100,
+            verbose_eval=50
+        )
 
-    bst.save_model(model_output)
-    print(f"\n✅ Training complete! Model saved as {model_output}")
-    # -------------------------------------------------------------------------
-    # Feature Importance (Variable Ranking)
-    # -------------------------------------------------------------------------
-    importance = bst.get_score(importance_type='gain')
+        bst.save_model(model_output)
+        print(f"\n✅ Training complete! Model saved as {model_output}")
 
-    # Convert to sorted DataFrame
-    df_importance = (
-    pd.DataFrame(list(importance.items()), columns=['feature', 'importance'])
-    .sort_values('importance', ascending=False)
-    .reset_index(drop=True)
-    )
+        # -------------------------------------------------------------------------
+        # Feature Importance (Variable Ranking)
+        # -------------------------------------------------------------------------
+        importance = bst.get_score(importance_type='gain')
 
-    print("\n📈 Variable ranking (by gain):")
-    print(df_importance)
+        df_importance = (
+            pd.DataFrame(list(importance.items()), columns=['feature', 'importance'])
+            .sort_values('importance', ascending=False)
+            .reset_index(drop=True)
+        )
 
-    # Optionally save to CSV or plot
-    df_importance.to_csv(self.output_dir / "feature_importance.csv", index=False)
-    print(f"✅ Saved variable ranking to {self.output_dir / 'feature_importance.csv'}")
+        print("\n📈 Variable ranking (by gain):")
+        print(df_importance)
 
-    plt.figure(figsize=(20, 20),dpi=300)
-    plt.barh(df_importance['feature'], df_importance['importance'])
-    plt.gca().invert_yaxis()
-    plt.xlabel('Importance (gain)')
-    plt.title('XGBoost Variable Importance')
-    plt.tight_layout()
-    plt.savefig(self.output_dir / "feature_importance.png")
-    plt.show()
+        df_importance.to_csv(self.output_dir / "feature_importance.csv", index=False)
+        print(f"✅ Saved variable ranking to {self.output_dir / 'feature_importance.csv'}")
+
+        plt.figure(figsize=(20, 20), dpi=300)
+        plt.barh(df_importance['feature'], df_importance['importance'])
+        plt.gca().invert_yaxis()
+        plt.xlabel('Importance (gain)')
+        plt.title('XGBoost Variable Importance')
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "feature_importance.png")
+        plt.show()
 
     # -------------------------------------------------------------------------
-    # Inference + Event-level BDT Results
+    # Inference
     # -------------------------------------------------------------------------
     def inference(
         self,
@@ -404,3 +396,4 @@ class RootToPickleConverter:
         print(f"  S/sqrt(S+B) = {significance:.3f}")
 
         return significance
+
