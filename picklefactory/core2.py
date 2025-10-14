@@ -10,7 +10,7 @@ import awkward as ak
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
-
+import matplotlib.pyplot as plt
 
 class RootToPickleConverter:
     """
@@ -245,6 +245,14 @@ class RootToPickleConverter:
     df_importance.to_csv(self.output_dir / "feature_importance.csv", index=False)
     print(f"✅ Saved variable ranking to {self.output_dir / 'feature_importance.csv'}")
 
+    plt.figure(figsize=(20, 20),dpi=300)
+    plt.barh(df_importance['feature'], df_importance['importance'])
+    plt.gca().invert_yaxis()
+    plt.xlabel('Importance (gain)')
+    plt.title('XGBoost Variable Importance')
+    plt.tight_layout()
+    plt.savefig(self.output_dir / "feature_importance.png")
+    plt.show()
 
     # -------------------------------------------------------------------------
     # Inference + Event-level BDT Results
