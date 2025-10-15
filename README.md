@@ -8,9 +8,8 @@ It streamlines the workflow from **ROOT → Pickle → BDT**, making it easier a
 ---
 
 ## 🚀 Features
-- 📦 Seamless conversion from ROOT files to Pickle format  
+- 📦 Seamless conversion from ROOT files to Parquet/Pickle format  
 - ⚙️ Easy integration with popular **BDT frameworks**  
-- ⚡ Planned support for **RAPIDS** to accelerate data processing  
 - 🧩 Modular and script-friendly design for rapid experimentation  
 
 ---
