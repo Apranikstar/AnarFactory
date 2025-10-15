@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 """
-Main pipeline for HEP analysis using RAPIDS + XGBoost (GPU).
+GPU-accelerated HEP analysis pipeline using RAPIDS + XGBoost (GPU).
+
+Example usage:
+    from hep_pipeline import run_pipeline
+
+    run_pipeline(
+        input_dir="data",
+        output_dir="outputs",
+        signal="HToBB",
+        background="QCD",
+        features=["pt", "eta", "phi", "mass"],
+        lumi=1e7,
+        cut=0.5,
+    )
 """
 
-import argparse
 from pathlib import Path
 from qomshe import (
     PickleFactory,
@@ -16,23 +28,40 @@ from qomshe import (
 )
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="GPU-accelerated HEP analysis pipeline"
-    )
+def run_pipeline(
+    input_dir,
+    output_dir="outputs",
+    signal=None,
+    background=None,
+    features=None,
+    lumi=1e7,
+    cut=0.5,
+    sample_frac=0.1,
+):
+    """
+    Run the full GPU-accelerated HEP analysis pipeline.
 
-    parser.add_argument("--input_dir", required=True, help="Directory with ROOT files")
-    parser.add_argument("--output_dir", default="outputs", help="Output directory")
-    parser.add_argument("--signal", required=True, help="Signal sample name pattern")
-    parser.add_argument("--background", required=True, help="Background sample pattern")
-    parser.add_argument("--features", nargs="+", required=True, help="List of features")
-    parser.add_argument("--lumi", type=float, default=1e7, help="Integrated luminosity (pb^-1)")
-    parser.add_argument("--cut", type=float, default=0.5, help="BDT cut threshold")
-
-    args = parser.parse_args()
-
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+    Parameters
+    ----------
+    input_dir : str or Path
+        Directory containing ROOT files.
+    output_dir : str or Path
+        Where to save intermediate and final outputs.
+    signal : str
+        Pattern to identify signal samples (e.g. 'HToBB').
+    background : str
+        Pattern to identify background samples (e.g. 'QCD').
+    features : list[str]
+        List of feature names used for training.
+    lumi : float
+        Integrated luminosity (pb^-1).
+    cut : float
+        BDT cut threshold.
+    sample_frac : float
+        Fraction of events to sample from each ROOT file (default 0.1).
+    """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # -------------------------------------
@@ -41,7 +70,7 @@ def main():
     pf = PickleFactory(base_dir=output_dir)
     for root_file in input_dir.glob("*.root"):
         df = load_root_to_cudf(root_file, tree_name="events")
-        df = sample_cudf(df, frac=0.1)
+        df = sample_cudf(df, frac=sample_frac)
         df = attach_cross_section(df, root_file.stem)
         pf.save(df, root_file.stem)
 
@@ -51,33 +80,31 @@ def main():
     model_path = output_dir / "bdt_model.json"
     bst, feature_importance = train_xgboost_gpu(
         data_dir=output_dir,
-        signal_pattern=args.signal,
-        background_pattern=args.background,
-        features=args.features,
+        signal_pattern=signal,
+        background_pattern=background,
+        features=features,
         model_output=model_path,
     )
 
     # -------------------------------------
     # 3. Inference
     # -------------------------------------
-    signal_files = [f for f in output_dir.glob(f"*{args.signal}*.pkl*")]
-    background_files = [f for f in output_dir.glob(f"*{args.background}*.pkl*")]
+    signal_files = [f for f in output_dir.glob(f"*{signal}*.pkl*")]
+    background_files = [f for f in output_dir.glob(f"*{background}*.pkl*")]
 
     sig_results, bg_results = run_inference_gpu(
         signal_files=signal_files,
         background_files=background_files,
-        features=args.features,
+        features=features,
         model_path=model_path,
-        cut_value=args.cut,
+        cut_value=cut,
         output_dir=output_dir,
     )
 
     # -------------------------------------
     # 4. Calculate Significance
     # -------------------------------------
-    significance = calculate_significance(sig_results, bg_results, lumi_pb=args.lumi)
+    significance = calculate_significance(sig_results, bg_results, lumi_pb=lumi)
     print(f"\n✨ Final Expected Significance: {significance:.3f}\n")
 
-
-if __name__ == "__main__":
-    main()
+    return significance, bst, feature_importance
