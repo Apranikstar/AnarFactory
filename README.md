@@ -21,7 +21,7 @@ It streamlines the workflow from **ROOT → Pickle → BDT**, making it easier a
 ---
 # Usage:
 ```python
-from hep_pipeline import run_pipeline
+from qomshe import run_pipeline
 
 sig, model, feat_imp = run_pipeline(
     input_dir="data/",
