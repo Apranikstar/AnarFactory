@@ -5,7 +5,7 @@ Main pipeline for HEP analysis using RAPIDS + XGBoost (GPU).
 
 import argparse
 from pathlib import Path
-from hep_factory import (
+from qomshe import (
     PickleFactory,
     load_root_to_cudf,
     sample_cudf,
