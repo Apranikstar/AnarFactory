@@ -19,3 +19,16 @@ It streamlines the workflow from **ROOT → Pickle → BDT**, making it easier a
 > Installation instructions will be available once **RAPIDS integration** is complete.
 
 ---
+# Usage:
+```python
+from hep_pipeline import run_pipeline
+
+sig, model, feat_imp = run_pipeline(
+    input_dir="data/",
+    output_dir="outputs/",
+    signal="HToBB",
+    background="QCD",
+    features=["pt", "eta", "phi", "mass"],
+)
+
+```
